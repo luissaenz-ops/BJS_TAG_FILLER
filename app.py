@@ -1,6 +1,6 @@
 import streamlit as st
 from google import genai
-from google.genai import types # We need to import 'types' for the config object
+from google.genai import types 
 import fitz 
 import tempfile
 import os
@@ -27,7 +27,6 @@ tags_file = st.file_uploader("Upload Tags.pdf", type="pdf")
 hotlist_file = st.file_uploader("Upload Hotlist.pdf", type="pdf")
 
 # --- 3. AI EXTRACTION PROMPT ---
-# We simplified the prompt because the config now handles locking the format
 extraction_prompt = """
 Extract the 'Article' number and match it to the 'Delivery Quantity' from this Hotlist document.
 1. Track the row exactly from the Article number to the Delivery Quantity column.
@@ -58,8 +57,7 @@ if st.button("Generate Filled Tags"):
                 hotlist_text += page.get_text()
             hotlist_doc.close()
             
-            # --- THE FIX IS HERE ---
-            # We add a config to force the response to be strict JSON
+            # Send to Gemini AI using Structured Outputs
             response = client.models.generate_content(
                 model='gemini-3.6-flash',
                 contents=[extraction_prompt, hotlist_text],
@@ -68,8 +66,6 @@ if st.button("Generate Filled Tags"):
                 )
             )
             
-            # Because we forced JSON, we don't need to try and clean it. 
-            # We can parse the response directly!
             delivery_quantities = json.loads(response.text)
             
             st.success("Successfully parsed Hotlist data!")
@@ -82,8 +78,8 @@ if st.button("Generate Filled Tags"):
                 page = pdf_document[page_num]
                 page_text = page.get_text()
                 
+                # Get the article number
                 tag_prompt = "Find the 6-digit article number on this tag and return ONLY the number. Nothing else."
-                
                 tag_response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=[tag_prompt, page_text]
@@ -92,13 +88,40 @@ if st.button("Generate Filled Tags"):
                 
                 quantity_to_write = str(delivery_quantities.get(article_number, "N/A"))
                 
-                date_location = fitz.Point(100, 150) 
-                initials_location = fitz.Point(100, 180)
-                count_location = fitz.Point(100, 210)
+                # --- FIND EXACT LOCATIONS ON THE PAGE ---
+                # Search for the anchor words on the document
+                count_rects = page.search_for("Count")
+                date_rects = page.search_for("Date")
                 
-                page.insert_text(date_location, str(count_date), fontsize=12, color=(0, 0, 0))
-                page.insert_text(initials_location, initials, fontsize=12, color=(0, 0, 0))
-                page.insert_text(count_location, quantity_to_write, fontsize=12, color=(0, 0, 0))
+                # Note: Depending on your exact tag format, you may need to search for "Mgr Count" instead of "Initials"
+                initials_rects = page.search_for("Initials") 
+                if not initials_rects:
+                     initials_rects = page.search_for("Mgr Count")
+                
+                # Default locations (fallback just in case the OCR misses the words)
+                count_location = fitz.Point(100, 210)
+                date_location = fitz.Point(100, 150)
+                initials_location = fitz.Point(100, 180)
+                
+                # If "Count" is found, put the number slightly to the right of its right edge (x1)
+                if count_rects:
+                    rect = count_rects[0]
+                    count_location = fitz.Point(rect.x1 + 15, rect.y1)
+                    
+                # If "Date" is found, put the date below its bottom edge (y1)
+                if date_rects:
+                    rect = date_rects[0]
+                    date_location = fitz.Point(rect.x0, rect.y1 + 25)
+                    
+                # If "Initials" (or Mgr Count) is found, put the initials below its bottom edge (y1)
+                if initials_rects:
+                    rect = initials_rects[0]
+                    initials_location = fitz.Point(rect.x0, rect.y1 + 25)
+                
+                # --- DRAW THE BIG, BOLD TEXT ---
+                page.insert_text(date_location, str(count_date), fontsize=20, fontname="helvetica-bold", color=(0, 0, 0))
+                page.insert_text(initials_location, initials, fontsize=20, fontname="helvetica-bold", color=(0, 0, 0))
+                page.insert_text(count_location, quantity_to_write, fontsize=20, fontname="helvetica-bold", color=(0, 0, 0))
                 
             output_path = "Filled_Tags.pdf"
             pdf_document.save(output_path)
@@ -120,4 +143,3 @@ if st.button("Generate Filled Tags"):
             os.remove(hotlist_path)
             if os.path.exists("Filled_Tags.pdf"):
                 os.remove("Filled_Tags.pdf")
-                
