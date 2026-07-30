@@ -1,5 +1,6 @@
 import streamlit as st
 from google import genai
+from google.genai import types # We need to import 'types' for the config object
 import fitz 
 import tempfile
 import os
@@ -12,7 +13,7 @@ if not api_key:
     st.error("Missing Gemini API Key. Please add 'GEMINI_API_KEY' to your Streamlit Secrets.")
     st.stop()
 
-# The new way to initialize the client
+# Initialize the client
 client = genai.Client(api_key=api_key)
 
 # --- 2. APP USER INTERFACE ---
@@ -26,14 +27,12 @@ tags_file = st.file_uploader("Upload Tags.pdf", type="pdf")
 hotlist_file = st.file_uploader("Upload Hotlist.pdf", type="pdf")
 
 # --- 3. AI EXTRACTION PROMPT ---
+# We simplified the prompt because the config now handles locking the format
 extraction_prompt = """
-You are a data extraction assistant. I will provide the text from an inventory 'Hotlist'. 
-Your job is to find the 'Article' number and match it to the 'Delivery Quantity'.
-Rules:
+Extract the 'Article' number and match it to the 'Delivery Quantity' from this Hotlist document.
 1. Track the row exactly from the Article number to the Delivery Quantity column.
-2. Only extract the primary number. Ignore extra zeros, letters like 'CV' or 'EA', and stacked text.
-3. Return the data ONLY in a strict JSON dictionary format where the Article number is the key, and the Delivery Quantity is the value. 
-Example: {"356363": "2", "341407": "5"}
+2. Only extract the primary integer for the quantity. Ignore extra zeros, 'CV', 'EA', and stacked text.
+Return the data as a JSON object where the keys are Article numbers (strings) and the values are the Delivery Quantities (strings).
 """
 
 # --- 4. PROCESSING ---
@@ -59,13 +58,19 @@ if st.button("Generate Filled Tags"):
                 hotlist_text += page.get_text()
             hotlist_doc.close()
             
-            # Send to Gemini AI using the new SDK and the 3.6 flash model
+            # --- THE FIX IS HERE ---
+            # We add a config to force the response to be strict JSON
             response = client.models.generate_content(
                 model='gemini-3.6-flash',
-                contents=[extraction_prompt, hotlist_text]
+                contents=[extraction_prompt, hotlist_text],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
-            clean_json = response.text.replace('```json', '').replace('```', '').strip()
-            delivery_quantities = json.loads(clean_json)
+            
+            # Because we forced JSON, we don't need to try and clean it. 
+            # We can parse the response directly!
+            delivery_quantities = json.loads(response.text)
             
             st.success("Successfully parsed Hotlist data!")
             st.info("Generating filled PDF...")
@@ -79,7 +84,6 @@ if st.button("Generate Filled Tags"):
                 
                 tag_prompt = "Find the 6-digit article number on this tag and return ONLY the number. Nothing else."
                 
-                # Using the new SDK for the tag prompt with the 3.6 flash model
                 tag_response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=[tag_prompt, page_text]
@@ -116,3 +120,4 @@ if st.button("Generate Filled Tags"):
             os.remove(hotlist_path)
             if os.path.exists("Filled_Tags.pdf"):
                 os.remove("Filled_Tags.pdf")
+                
