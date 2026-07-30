@@ -1,20 +1,19 @@
 import streamlit as st
-import google.generativeai as genai
-import fitz  # PyMuPDF for reading and modifying PDFs
+from google import genai # Updated import for the new SDK
+import fitz 
 import tempfile
 import os
 import json
 
 # --- 1. SETUP GEMINI API VIA SECRETS ---
-# Reads the key securely from Streamlit Cloud's private settings
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 if not api_key:
     st.error("Missing Gemini API Key. Please add 'GEMINI_API_KEY' to your Streamlit Secrets.")
     st.stop()
 
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# The new way to initialize the client
+client = genai.Client(api_key=api_key)
 
 # --- 2. APP USER INTERFACE ---
 st.title("BJ's Inventory Tag Filler")
@@ -44,7 +43,6 @@ if st.button("Generate Filled Tags"):
     else:
         st.info("Reading the Hotlist with AI... please wait.")
         
-        # Save temporary copies for processing
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_tags:
             tmp_tags.write(tags_file.read())
             tags_path = tmp_tags.name
@@ -61,8 +59,11 @@ if st.button("Generate Filled Tags"):
                 hotlist_text += page.get_text()
             hotlist_doc.close()
             
-            # Send to Gemini AI
-            response = model.generate_content([extraction_prompt, hotlist_text])
+            # Send to Gemini AI using the new SDK and the 2.5 flash model
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[extraction_prompt, hotlist_text]
+            )
             clean_json = response.text.replace('```json', '').replace('```', '').strip()
             delivery_quantities = json.loads(clean_json)
             
@@ -76,20 +77,21 @@ if st.button("Generate Filled Tags"):
                 page = pdf_document[page_num]
                 page_text = page.get_text()
                 
-                # Identify Article Number on tag page
                 tag_prompt = "Find the 6-digit article number on this tag and return ONLY the number. Nothing else."
-                tag_response = model.generate_content([tag_prompt, page_text])
+                
+                # Using the new SDK for the tag prompt
+                tag_response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[tag_prompt, page_text]
+                )
                 article_number = tag_response.text.strip()
                 
-                # Retrieve extracted quantity
                 quantity_to_write = str(delivery_quantities.get(article_number, "N/A"))
                 
-                # Coordinates for text placement on the tag
                 date_location = fitz.Point(100, 150) 
                 initials_location = fitz.Point(100, 180)
                 count_location = fitz.Point(100, 210)
                 
-                # Draw text onto PDF
                 page.insert_text(date_location, str(count_date), fontsize=12, color=(0, 0, 0))
                 page.insert_text(initials_location, initials, fontsize=12, color=(0, 0, 0))
                 page.insert_text(count_location, quantity_to_write, fontsize=12, color=(0, 0, 0))
@@ -98,7 +100,6 @@ if st.button("Generate Filled Tags"):
             pdf_document.save(output_path)
             pdf_document.close()
             
-            # Download button
             with open(output_path, "rb") as f:
                 st.download_button(
                     label="Download Completed Tags PDF",
