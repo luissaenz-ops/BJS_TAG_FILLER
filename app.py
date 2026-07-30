@@ -25,61 +25,69 @@ initials = st.text_input("Enter your Initials:", value="JS")
 count_date = st.date_input("Select the Date:")
 
 st.subheader("Text Formatting & Position Controls")
-col1, col2, col3 = st.columns(3)
-with col1:
-    font_size = st.slider("Font Size", min_value=20, max_value=120, value=75, step=5)
-with col2:
-    x_offset = st.slider("Horizontal Shift (X)", min_value=-100, max_value=200, value=20, step=5)
-with col3:
-    y_offset = st.slider("Vertical Shift (Y)", min_value=-50, max_value=100, value=15, step=5)
+font_size = st.slider("Global Font Size", min_value=20, max_value=120, value=75, step=5)
+
+# Create tabs for independent controls
+tab1, tab2, tab3 = st.tabs(["Quantity Placement", "Date Placement", "Initials Placement"])
+
+with tab1:
+    qty_x = st.slider("Quantity Horizontal Shift (X)", -200, 200, 10, step=5, key="qx")
+    qty_y = st.slider("Quantity Vertical Shift (Y)", -200, 200, 0, step=5, key="qy")
+    qty_rot = st.slider("Quantity Rotation", -180, 180, 0, step=5, key="qr")
+
+with tab2:
+    date_x = st.slider("Date Horizontal Shift (X)", -200, 200, 0, step=5, key="dx")
+    date_y = st.slider("Date Vertical Shift (Y)", -200, 200, 30, step=5, key="dy")
+    date_rot = st.slider("Date Rotation", -180, 180, 0, step=5, key="dr")
+
+with tab3:
+    init_x = st.slider("Initials Horizontal Shift (X)", -200, 200, 0, step=5, key="ix")
+    init_y = st.slider("Initials Vertical Shift (Y)", -200, 200, 30, step=5, key="iy")
+    init_rot = st.slider("Initials Rotation", -180, 180, 0, step=5, key="ir")
 
 tags_file = st.file_uploader("Upload Tags.pdf", type="pdf")
 hotlist_file = st.file_uploader("Upload Hotlist.pdf", type="pdf")
 
 # --- 3. LIVE PREVIEW SECTION ---
-# This runs automatically as soon as you upload the Tags.pdf!
 if tags_file:
     st.subheader("Live Tag Preview")
-    st.write("Adjust the sliders above. The red text shows exactly where your data will print.")
+    st.write("Adjust the sliders in the tabs above. The red text shows exactly where your data will print.")
     
-    # Save a temporary copy just for the preview
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_preview:
         tmp_preview.write(tags_file.getvalue())
         preview_path = tmp_preview.name
         
     try:
         doc = fitz.open(preview_path)
-        page = doc[0]  # Grab only the first page
+        page = doc[0] 
         
-        # Search for words to anchor the text
         count_rects = page.search_for("Count")
         date_rects = page.search_for("Date")
         initials_rects = page.search_for("Initials")
         
-        # Default fallbacks
-        count_location = fitz.Point(180 + x_offset, 180 + y_offset)
-        date_location = fitz.Point(180 + x_offset, 100 + y_offset)
-        initials_location = fitz.Point(180 + x_offset, 250 + y_offset)
+        # Default starting points
+        count_location = fitz.Point(180, 180)
+        date_location = fitz.Point(180, 100)
+        initials_location = fitz.Point(180, 250)
         
-        # Apply placements with your slider offsets
+        # Apply the detected anchors PLUS your individual X/Y shifts
         if count_rects:
-            count_location = fitz.Point(count_rects[0].x1 + 10 + x_offset, count_rects[0].y1 + y_offset)
+            count_location = fitz.Point(count_rects[0].x1 + qty_x, count_rects[0].y1 + qty_y)
         if date_rects:
-            date_location = fitz.Point(date_rects[0].x0 + x_offset, date_rects[0].y1 + y_offset + 30)
+            date_location = fitz.Point(date_rects[0].x0 + date_x, date_rects[0].y1 + date_y)
         if initials_rects:
-            initials_location = fitz.Point(initials_rects[0].x0 + x_offset, initials_rects[0].y1 + y_offset + 30)
+            initials_location = fitz.Point(initials_rects[0].x0 + init_x, initials_rects[0].y1 + init_y)
             
         formatted_date = count_date.strftime("%m/%d")
         display_initials = initials if initials else "ABC"
         
-        # Draw placeholder text in RED (1, 0, 0) so it stands out in the preview
-        page.insert_text(date_location, formatted_date, fontsize=font_size, fontname="helvetica-bold", color=(1, 0, 0))
-        page.insert_text(initials_location, display_initials, fontsize=font_size, fontname="helvetica-bold", color=(1, 0, 0))
-        page.insert_text(count_location, "99", fontsize=font_size, fontname="helvetica-bold", color=(1, 0, 0))
+        # Draw placeholder text in RED using the morph property for rotation
+        page.insert_text(date_location, formatted_date, fontsize=font_size, fontname="helvetica-bold", color=(1, 0, 0), morph=(date_location, fitz.Matrix(date_rot)))
+        page.insert_text(initials_location, display_initials, fontsize=font_size, fontname="helvetica-bold", color=(1, 0, 0), morph=(initials_location, fitz.Matrix(init_rot)))
+        page.insert_text(count_location, "99", fontsize=font_size, fontname="helvetica-bold", color=(1, 0, 0), morph=(count_location, fitz.Matrix(qty_rot)))
         
-        # Convert the PDF page to an image and display it
         pix = page.get_pixmap(dpi=150)
-        st.image(pix.tobytes(), caption="Page 1 Preview (Red text shows your placement)")
+        st.image(pix.tobytes(), caption="Page 1 Preview")
         
         doc.close()
     except Exception as e:
@@ -156,21 +164,21 @@ if st.button("Generate Filled Tags"):
                 date_rects = page.search_for("Date")
                 initials_rects = page.search_for("Initials")
                 
-                count_location = fitz.Point(180 + x_offset, 180 + y_offset)
-                date_location = fitz.Point(180 + x_offset, 100 + y_offset)
-                initials_location = fitz.Point(180 + x_offset, 250 + y_offset)
+                count_location = fitz.Point(180, 180)
+                date_location = fitz.Point(180, 100)
+                initials_location = fitz.Point(180, 250)
                 
                 if count_rects:
-                    count_location = fitz.Point(count_rects[0].x1 + 10 + x_offset, count_rects[0].y1 + y_offset)
+                    count_location = fitz.Point(count_rects[0].x1 + qty_x, count_rects[0].y1 + qty_y)
                 if date_rects:
-                    date_location = fitz.Point(date_rects[0].x0 + x_offset, date_rects[0].y1 + y_offset + 30)
+                    date_location = fitz.Point(date_rects[0].x0 + date_x, date_rects[0].y1 + date_y)
                 if initials_rects:
-                    initials_location = fitz.Point(initials_rects[0].x0 + x_offset, initials_rects[0].y1 + y_offset + 30)
+                    initials_location = fitz.Point(initials_rects[0].x0 + init_x, initials_rects[0].y1 + init_y)
                 
-                # Draw the final text in BLACK (0, 0, 0)
-                page.insert_text(date_location, formatted_date, fontsize=font_size, fontname="helvetica-bold", color=(0, 0, 0))
-                page.insert_text(initials_location, initials, fontsize=font_size, fontname="helvetica-bold", color=(0, 0, 0))
-                page.insert_text(count_location, quantity_to_write, fontsize=font_size, fontname="helvetica-bold", color=(0, 0, 0))
+                # Draw the final text in BLACK, applying the individual rotations
+                page.insert_text(date_location, formatted_date, fontsize=font_size, fontname="helvetica-bold", color=(0, 0, 0), morph=(date_location, fitz.Matrix(date_rot)))
+                page.insert_text(initials_location, initials, fontsize=font_size, fontname="helvetica-bold", color=(0, 0, 0), morph=(initials_location, fitz.Matrix(init_rot)))
+                page.insert_text(count_location, quantity_to_write, fontsize=font_size, fontname="helvetica-bold", color=(0, 0, 0), morph=(count_location, fitz.Matrix(qty_rot)))
                 
             with st.expander("View Extraction Summary"):
                 st.write(matches_summary)
