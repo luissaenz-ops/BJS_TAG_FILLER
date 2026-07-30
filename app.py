@@ -1,5 +1,5 @@
 import streamlit as st
-from google import genai # Updated import for the new SDK
+from google import genai
 import fitz 
 import tempfile
 import os
@@ -59,9 +59,9 @@ if st.button("Generate Filled Tags"):
                 hotlist_text += page.get_text()
             hotlist_doc.close()
             
-            # Send to Gemini AI using the new SDK and the 2.5 flash model
+            # Send to Gemini AI using the new SDK and the 3.6 flash model
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.6-flash',
                 contents=[extraction_prompt, hotlist_text]
             )
             clean_json = response.text.replace('```json', '').replace('```', '').strip()
@@ -79,9 +79,9 @@ if st.button("Generate Filled Tags"):
                 
                 tag_prompt = "Find the 6-digit article number on this tag and return ONLY the number. Nothing else."
                 
-                # Using the new SDK for the tag prompt
+                # Using the new SDK for the tag prompt with the 3.6 flash model
                 tag_response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.6-flash',
                     contents=[tag_prompt, page_text]
                 )
                 article_number = tag_response.text.strip()
