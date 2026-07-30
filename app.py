@@ -34,7 +34,6 @@ hotlist_file = st.file_uploader("Upload Hotlist.pdf", type="pdf")
 
 # --- 3. AI EXTRACTION PROMPTS ---
 
-# Directs Gemini to extract Article numbers and Delivery Quantities from the Hotlist
 hotlist_extraction_prompt = """
 You are analyzing an inventory 'Hotlist' document containing product tables across one or more pages.
 Your job is to read every row in the document table:
@@ -46,7 +45,6 @@ Return the result STRICTLY as a valid JSON object where keys are the Article num
 Example output: {"356363": "2", "341407": "5", "28980": "7"}
 """
 
-# Directs Gemini to find the main article number on a single tag
 tag_article_prompt = """
 Examine this inventory tag page.
 Locate the primary, large item/article number displayed on the tag (e.g., 356363, 224527, etc.).
@@ -114,7 +112,6 @@ if tags_file:
             doc = fitz.open(preview_path)
             page = doc[0] 
             
-            # Locate anchor words on page 1
             count_rects = page.search_for("Count")
             date_rects = page.search_for("Date")
             initials_rects = page.search_for("Initials")
@@ -140,12 +137,11 @@ if tags_file:
             formatted_date = count_date.strftime("%m/%d")
             display_initials = initials if initials else "ABC"
             
-            # Draw preview text in RED with rotation
             insert_safe_text(page, date_loc, formatted_date, font_size, (1, 0, 0), text_rotation)
             insert_safe_text(page, initials_loc, display_initials, font_size, (1, 0, 0), text_rotation)
             insert_safe_text(page, count_loc, "99", font_size, (1, 0, 0), text_rotation)
             
-            pix = page.get_pixmap(dpi=150)
+            pix = page.get_pixmap(dpi=100)
             st.image(pix.tobytes(), use_container_width=True)
             doc.close()
         except Exception as e:
@@ -170,7 +166,7 @@ if tags_file:
                 hotlist_path = tmp_hotlist.name
 
             try:
-                # Step A: Load text AND image parts for multi-page Hotlist extraction
+                # Step A: Load text across Hotlist.pdf
                 hotlist_doc = fitz.open(hotlist_path)
                 contents_payload = [hotlist_extraction_prompt]
                 
@@ -178,23 +174,29 @@ if tags_file:
                 for page_idx in range(len(hotlist_doc)):
                     page = hotlist_doc[page_idx]
                     page_text = page.get_text()
-                    full_text += f"\n--- PAGE {page_idx + 1} ---\n" + page_text
-                    
-                    # Convert page to PNG image so Gemini Vision can analyze layout visually
-                    pix = page.get_pixmap(dpi=150)
-                    img_bytes = pix.tobytes("png")
-                    contents_payload.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
-                
+                    if page_text.strip():
+                        full_text += f"\n--- PAGE {page_idx + 1} ---\n" + page_text
+
+                # If text exists, send text payload
                 if full_text.strip():
-                    contents_payload.append(f"\nExtracted PDF Text:\n{full_text}")
+                    contents_payload.append(f"Extracted Hotlist Text:\n{full_text}")
+                else:
+                    # Fallback to image payload at 100 DPI for scanned documents
+                    for page_idx in range(len(hotlist_doc)):
+                        page = hotlist_doc[page_idx]
+                        pix = page.get_pixmap(dpi=100)
+                        img_bytes = pix.tobytes("jpeg")
+                        contents_payload.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
 
                 hotlist_doc.close()
                 
-                # Step B: Call Gemini 3.6 Flash using JSON mode
+                # Step B: Call Gemini 3.6 Flash with timeout config
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=contents_payload,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
                 )
                 
                 raw_quantities = json.loads(response.text)
@@ -212,15 +214,15 @@ if tags_file:
                     page = pdf_document[page_num]
                     page_text = page.get_text()
                     
-                    # Page image fallback for Gemini Tag Article extraction
-                    pix_tag = page.get_pixmap(dpi=150)
-                    tag_img_bytes = pix_tag.tobytes("png")
-                    
-                    tag_payload = [
-                        tag_article_prompt,
-                        types.Part.from_bytes(data=tag_img_bytes, mime_type="image/png"),
-                        f"Page Text:\n{page_text}"
-                    ]
+                    if page_text.strip():
+                        tag_payload = [tag_article_prompt, f"Page Text:\n{page_text}"]
+                    else:
+                        pix_tag = page.get_pixmap(dpi=100)
+                        tag_img_bytes = pix_tag.tobytes("jpeg")
+                        tag_payload = [
+                            tag_article_prompt,
+                            types.Part.from_bytes(data=tag_img_bytes, mime_type="image/jpeg")
+                        ]
                     
                     tag_response = client.models.generate_content(
                         model='gemini-3.6-flash',
@@ -236,7 +238,6 @@ if tags_file:
                         "Delivery Quantity": quantity_to_write
                     })
                     
-                    # Calculate position anchors
                     count_rects = page.search_for("Count")
                     date_rects = page.search_for("Date")
                     initials_rects = page.search_for("Initials")
@@ -259,7 +260,6 @@ if tags_file:
                     date_loc = fitz.Point(base_date_x + date_x, base_date_y + date_y)
                     initials_loc = fitz.Point(base_init_x + init_x, base_init_y + init_y)
                     
-                    # Write final text in black ink
                     insert_safe_text(page, date_loc, formatted_date, font_size, (0, 0, 0), text_rotation)
                     insert_safe_text(page, initials_loc, initials, font_size, (0, 0, 0), text_rotation)
                     insert_safe_text(page, count_loc, quantity_to_write, font_size, (0, 0, 0), text_rotation)
