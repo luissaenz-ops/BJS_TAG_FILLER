@@ -16,11 +16,11 @@ if not api_key:
 
 client = genai.Client(api_key=api_key)
 
-# --- 2. STREAMLIT LAYOUT CONFIGURATION ---
-st.set_page_config(layout="wide")
+# --- 2. STREAMLIT WIDE LAYOUT CONFIGURATION ---
+st.set_page_config(layout="wide", page_title="BJ's Inventory Tag Filler")
 
 st.title("BJ's Inventory Tag Filler")
-st.write("Upload multi-page Tags and Hotlist PDFs to automatically extract and print inventory delivery quantities.")
+st.write("Upload multi-page Tags and Hotlist PDFs to automatically extract and fill inventory tags.")
 
 # User Inputs
 col_input1, col_input2 = st.columns(2)
@@ -34,35 +34,48 @@ hotlist_file = st.file_uploader("Upload Hotlist.pdf", type="pdf")
 
 # --- 3. AI EXTRACTION PROMPTS ---
 
-# Prompt to parse the entire Hotlist table across all pages
+# Directs Gemini to extract Article numbers and Delivery Quantities from the Hotlist
 hotlist_extraction_prompt = """
-You are analyzing an inventory 'Hotlist' document that may contain multiple pages.
-Scan every row in the table:
-1. Identify the item number in the 'Article' column (this is typically a 4 to 8 digit number).
-2. Follow that specific row horizontally to find the corresponding value under the 'Delivery Quantity' column.
-3. Extract only the primary quantity number (e.g., if it says '2.000 CV' or '120.000 CV', return '2' or '120'). Ignore unit labels like 'CV', 'EA', or trailing decimals/zeros.
+You are analyzing an inventory 'Hotlist' document containing product tables across one or more pages.
+Your job is to read every row in the document table:
+1. Locate the item number in the 'Article' column (e.g., numbers like 356363, 341407, 28980, etc.).
+2. Follow that exact row horizontally to find the primary number under the 'Delivery Quantity' column.
+3. Extract ONLY the main quantity integer (e.g., for '2.000 CV' return '2', for '120.000 CV' return '120'). Ignore unit text like 'CV', 'EA', or stacked decimals.
 
-Return the result strictly as a JSON object where each key is the Article number (as a string) and the value is the extracted Delivery Quantity (as a string).
+Return the result STRICTLY as a valid JSON object where keys are the Article numbers (strings) and values are the Delivery Quantities (strings).
 Example output: {"356363": "2", "341407": "5", "28980": "7"}
 """
 
-# Prompt to extract the main article number from a single tag
+# Directs Gemini to find the main article number on a single tag
 tag_article_prompt = """
-Examine the text/content of this inventory tag page.
-Locate the primary, large item/article number on the tag (this is the main identifying article number for the product, which can vary in digit length).
-Return ONLY the clean digits of this article number. Do not include extra words or labels.
+Examine this inventory tag page.
+Locate the primary, large item/article number displayed on the tag (e.g., 356363, 224527, etc.).
+Return ONLY the clean numerical digits of this article number. Do not include any extra text or labels.
 """
 
 def clean_digits(text):
-    """Helper function to keep only digits from a string."""
+    """Helper function to strip out non-digit characters."""
     return re.sub(r'\D', '', str(text))
 
 def insert_safe_text(page, location, text, size, color, angle):
-    """Helper function to safely insert rotated text onto a PDF page."""
+    """Helper function to insert text with optional rotation matrix."""
     if angle != 0:
-        page.insert_text(location, text, fontsize=size, fontname="helvetica-bold", color=color, morph=(location, fitz.Matrix(angle)))
+        page.insert_text(
+            location, 
+            text, 
+            fontsize=size, 
+            fontname="helvetica-bold", 
+            color=color, 
+            morph=(location, fitz.Matrix(angle))
+        )
     else:
-        page.insert_text(location, text, fontsize=size, fontname="helvetica-bold", color=color)
+        page.insert_text(
+            location, 
+            text, 
+            fontsize=size, 
+            fontname="helvetica-bold", 
+            color=color
+        )
 
 # --- 4. INTERACTIVE UI & LIVE PREVIEW ---
 if tags_file:
@@ -74,8 +87,6 @@ if tags_file:
         st.subheader("Placement & Rotation Controls")
         
         font_size = st.slider("Global Font Size", 20, 120, 75, step=5)
-        
-        # Rotation selector (0, 90, 180, 270 degrees)
         text_rotation = st.selectbox("Text Rotation Angle (Degrees)", options=[0, 90, 180, 270], index=0)
         
         st.markdown("**Quantity Position**")
@@ -129,7 +140,7 @@ if tags_file:
             formatted_date = count_date.strftime("%m/%d")
             display_initials = initials if initials else "ABC"
             
-            # Render red preview text with rotation
+            # Draw preview text in RED with rotation
             insert_safe_text(page, date_loc, formatted_date, font_size, (1, 0, 0), text_rotation)
             insert_safe_text(page, initials_loc, display_initials, font_size, (1, 0, 0), text_rotation)
             insert_safe_text(page, count_loc, "99", font_size, (1, 0, 0), text_rotation)
@@ -140,14 +151,15 @@ if tags_file:
         except Exception as e:
             st.error(f"Could not generate preview: {e}")
         finally:
-            os.remove(preview_path)
+            if os.path.exists(preview_path):
+                os.remove(preview_path)
 
     # --- 5. FINAL MULTI-PAGE PROCESSING ---
     if generate_clicked:
         if not initials or not hotlist_file:
             st.warning("Please fill in your initials and upload the Hotlist PDF.")
         else:
-            st.info("Reading all pages of the Hotlist with Gemini AI... please wait.")
+            st.info("Processing Hotlist pages with Gemini AI... please wait.")
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_tags:
                 tmp_tags.write(tags_file.getvalue())
@@ -158,48 +170,73 @@ if tags_file:
                 hotlist_path = tmp_hotlist.name
 
             try:
-                # Step A: Extract full text across ALL pages of Hotlist.pdf
+                # Step A: Load text AND image parts for multi-page Hotlist extraction
                 hotlist_doc = fitz.open(hotlist_path)
-                full_hotlist_text = ""
+                contents_payload = [hotlist_extraction_prompt]
+                
+                full_text = ""
                 for page_idx in range(len(hotlist_doc)):
-                    full_hotlist_text += f"\n--- HOTLIST PAGE {page_idx + 1} ---\n"
-                    full_hotlist_text += hotlist_doc[page_idx].get_text()
+                    page = hotlist_doc[page_idx]
+                    page_text = page.get_text()
+                    full_text += f"\n--- PAGE {page_idx + 1} ---\n" + page_text
+                    
+                    # Convert page to PNG image so Gemini Vision can analyze layout visually
+                    pix = page.get_pixmap(dpi=150)
+                    img_bytes = pix.tobytes("png")
+                    contents_payload.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+                
+                if full_text.strip():
+                    contents_payload.append(f"\nExtracted PDF Text:\n{full_text}")
+
                 hotlist_doc.close()
                 
-                # Step B: Pass complete Hotlist text to Gemini to generate the mapping dictionary
+                # Step B: Call Gemini 3.6 Flash using JSON mode
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
-                    contents=[hotlist_extraction_prompt, full_hotlist_text],
+                    contents=contents_payload,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
                 
                 raw_quantities = json.loads(response.text)
-                # Normalize all dictionary keys to pure digits
                 delivery_quantities = {clean_digits(k): str(v) for k, v in raw_quantities.items()}
                 
                 st.success(f"Successfully processed Hotlist! Extracted {len(delivery_quantities)} article entries.")
-                st.info("Processing each tag page...")
+                st.info("Writing counts onto your tags...")
                 
                 formatted_date = count_date.strftime("%m/%d")
                 pdf_document = fitz.open(tags_path)
+                matches_summary = []
                 
-                # Step C: Iterate through every page in Tags.pdf
+                # Step C: Loop through every page in Tags.pdf
                 for page_num in range(len(pdf_document)):
                     page = pdf_document[page_num]
                     page_text = page.get_text()
                     
-                    # Ask Gemini to find the primary article number on this tag page
+                    # Page image fallback for Gemini Tag Article extraction
+                    pix_tag = page.get_pixmap(dpi=150)
+                    tag_img_bytes = pix_tag.tobytes("png")
+                    
+                    tag_payload = [
+                        tag_article_prompt,
+                        types.Part.from_bytes(data=tag_img_bytes, mime_type="image/png"),
+                        f"Page Text:\n{page_text}"
+                    ]
+                    
                     tag_response = client.models.generate_content(
                         model='gemini-3.6-flash',
-                        contents=[tag_article_prompt, page_text]
+                        contents=tag_payload
                     )
                     
                     article_number = clean_digits(tag_response.text.strip())
-                    
-                    # Match extracted article number with Hotlist dictionary
                     quantity_to_write = delivery_quantities.get(article_number, "N/A")
                     
-                    # Locate positions
+                    matches_summary.append({
+                        "Tag Page": page_num + 1, 
+                        "Article Found": article_number, 
+                        "Delivery Quantity": quantity_to_write
+                    })
+                    
+                    # Calculate position anchors
                     count_rects = page.search_for("Count")
                     date_rects = page.search_for("Date")
                     initials_rects = page.search_for("Initials")
@@ -222,10 +259,13 @@ if tags_file:
                     date_loc = fitz.Point(base_date_x + date_x, base_date_y + date_y)
                     initials_loc = fitz.Point(base_init_x + init_x, base_init_y + init_y)
                     
-                    # Insert final black text with selected rotation
+                    # Write final text in black ink
                     insert_safe_text(page, date_loc, formatted_date, font_size, (0, 0, 0), text_rotation)
                     insert_safe_text(page, initials_loc, initials, font_size, (0, 0, 0), text_rotation)
                     insert_safe_text(page, count_loc, quantity_to_write, font_size, (0, 0, 0), text_rotation)
+                    
+                with st.expander("View Page-by-Page Summary"):
+                    st.write(matches_summary)
                     
                 output_path = "Filled_Tags.pdf"
                 pdf_document.save(output_path)
@@ -244,7 +284,9 @@ if tags_file:
                 st.error(f"An error occurred during processing: {e}")
                 
             finally:
-                os.remove(tags_path)
-                os.remove(hotlist_path)
+                if os.path.exists(tags_path):
+                    os.remove(tags_path)
+                if os.path.exists(hotlist_path):
+                    os.remove(hotlist_path)
                 if os.path.exists("Filled_Tags.pdf"):
                     os.remove("Filled_Tags.pdf")
